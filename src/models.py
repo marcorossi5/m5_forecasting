@@ -69,13 +69,13 @@ def create_model(model_type: str, lb: int, fh: int):
 
 
 def load_model(model_type: str, ckpt_path):
-    device = "gpu" if torch.cuda_is_available() else "cpu"
+    # device = "gpu" if torch.cuda.is_available() else "cpu"
     if model_type == "nhits":
-        return models.NHiTSModel.load(ckpt_path, map_location=device)
+        return models.NHiTSModel.load(ckpt_path) #, map_location=device)
     elif model_type == "nbeats":
-        return models.NBEATSModel.load(ckpt_path, map_location=device)
+        return models.NBEATSModel.load(ckpt_path) #, map_location=device)
     elif model_type == "tft":
-        return models.TFTModel.load(ckpt_path, map_location=device)
+        return models.TFTModel.load(ckpt_path) # , map_location=device)
     else:
         raise ValueError(f"Model type not recognized, got {model_type}")
 
@@ -91,7 +91,7 @@ def get_epochs(model_type: str):
         raise ValueError(f"Model type not recognized, got {model_type}")
 
 
-def get_trainer(model_type: str, epochs: int):
+def get_trainer(model_type: str):
     """Configure trainer"""
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
         dirpath=f"./training_logs/ckpts/{model_type}",

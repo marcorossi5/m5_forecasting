@@ -26,11 +26,11 @@ def generate_covariates(series: List[TimeSeries]):
     holidays_series = holidays_timeseries(series[0].time_index, "ITA").astype(
         np.float32
     )
-    return [holidays_series.copy() for _ in range(len(series))]
+    return [holidays_series for _ in range(len(series))]
 
 
 def load_training_data():
-    data_folder = "./dataset/m5_tseries"
+    data_folder = "./dataset"
     glob_str = os.path.join(data_folder, "m5_*.pkl")
     file_list = sorted(glob.glob(glob_str))
 
@@ -50,7 +50,7 @@ def load_training_data():
 
 
 def load_test_data():
-    data_folder = "./dataset/m5_tseries"
+    data_folder = "./dataset"
     glob_str = os.path.join(data_folder, "m5_*.pkl")
     file_list = sorted(glob.glob(glob_str))
 
@@ -96,18 +96,34 @@ def transform_series_to_df(
 
 
 def save_predictions(model_type: str, df):
-    df = df.rename(columns={"quantity": f"{model_type}_quantity"})
-    folder = f"./training_logs/preds/{model_type}"
+    folder = f"./training_logs/preds"
     if not os.path.isdir(folder):
         os.makedirs(folder)
     df.to_csv(f"{folder}/{model_type}_preds.csv", index=False)
 
 
+def tweedie_loss(series_true, series_pred, inter_reduction=None):
+    scores = []
+    def log_tweedie_loss(y, y_hat, p=1.5):
+        return -y_hat * np.pow(y, 1 - p) / (1 - p) + np.pow(y, 2 - p) / (2 - p)
+    for y_pred, y_true in zip(series_true, series_pred):
+        pred = y_pred.values().flatten()
+        true = y_true.values().flatten()
+        scores.append(log_tweedie_loss(true, pred))
+
+    if inter_reduction is not None:
+        return inter_reduction(scores)
+    return scores
+
+
 def evaluate_predictions(series_true: List[TimeSeries], series_pred: List[TimeSeries]):
-    mean_per_prod = np.array([np.mean(s.values()) for s in series_true])
-    maes = np.array(metrics.mae(series_pred, series_true))
-    score = maes / mean_per_prod
-    print("Error over mean:", np.mean(score))
+    # mean_per_prod = np.array([np.mean(s.values()) for s in series_true])
+    mae = metrics.mae(series_pred, series_true, inter_reduction=np.mean)
+    print("MAE:", mae)
+    rmse = metrics.rmse(series_pred, series_true, inter_reduction=np.mean)
+    print("RMSE:", rmse)
+    tweedie = tweedie_loss(series_pred, series_true, inter_reduction=np.mean)
+    print("Tweedie loss:", tweedie)
 
 
 def training_pipeline(model_type: str):
@@ -130,34 +146,44 @@ def training_pipeline(model_type: str):
     )
 
 
-def inference_pipeline(model_type: str):
+def inference_pipeline(model_type: str, ckpt_path: str):
     print("Load testing data")
     data = load_test_data()
 
-    model = models.load_model(model_type)
+    # model = models.load_model(model_type, ckpt_path)
 
     print(f"Testing length: {len(data['test'])}")
-    preds = model.predict(
-        model.output_chunk_length,
-        series=data["test"],
-        past_covariates=data["test_cov"],
-    )
+    # preds = model.predict(
+    #     model.output_chunk_length,
+    #     series=data["test"],
+    #     past_covariates=data["test_cov"],
+    #     num_loader_workers=os.cpu_count(),
+    # )
 
     print("Transform to predictions to csv")
-    df = transform_series_to_df(data["fnames"], preds)
+    # df_preds = transform_series_to_df(data["fnames"], preds)
+    df_preds = pd.read_csv(f"training_logs/preds/{model_type}_preds.csv").drop(columns="quantity")
+    df_preds["time"] = pd.to_datetime(df_preds["time"])
+    # df_preds["product"] = df_preds["product"].astype(object)
+
+    # df_preds = df_preds.rename(columns={"quantity": f"{model_type}_quantity"})
+    df_true = transform_series_to_df(data["fnames"], data["test_labels"])
+    df_true["product"] = df_true["product"].astype(int)
+    
+    df = df_preds.merge(df_true, how="inner", on=["product", "time"])
 
     print("Saving predictions")
     save_predictions(model_type, df)
 
     print("Evaluate predictions")
-    evaluate_predictions(data["test_cov"], preds)
+    # evaluate_predictions(data["test_cov"], preds)
 
 
 def main(args: argparse.Namespace):
     if args.mode == "training":
         training_pipeline(args.model_type)
     elif args.mode == "inference":
-        inference_pipeline(args.model_type)
+        inference_pipeline(args.model_type, args.ckpt_path)
     else:
         raise ValueError(f"Mode not recognized, got {args.mode}")
 
@@ -175,7 +201,7 @@ if __name__ == "__main__":
         help="the model type to be used",
     )
 
-    parser.add_argument("-p", "--path", default=None, help="the model checkpoint to load")
+    parser.add_argument("-p", "--path", dest="ckpt_path", default=None, help="the model checkpoint to load")
     args = parser.parse_args()
 
     main(args)
